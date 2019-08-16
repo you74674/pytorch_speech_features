@@ -109,14 +109,14 @@ def fbank(signal,samplerate=16000,winlen=0.025,winstep=0.01,
     #energy = numpy.sum(pspec,1) # this stores the total energy in each frame
     energy = pspec.sum(dim=-1)
     #energy = numpy.where(energy == 0,numpy.finfo(float).eps,energy) # if energy is zero, we get problems with log
-    energy[energy==0] = torch.finfo(float).eps
+    energy[energy==0] = torch.finfo(signal.dtype).eps
 
     fb = get_filterbanks(nfilt,nfft,samplerate,lowfreq,highfreq)
     fb = torch.Tensor(fb).type_as(signal)
     #feat = numpy.dot(pspec,fb.T) # compute the filterbank energies
-    feat = pspec @ fb.T
+    feat = pspec @ fb.transpose(0, 1)
     #feat = numpy.where(feat == 0,numpy.finfo(float).eps,feat) # if feat is zero, we get problems with log
-    feat[feat==0] =torch.finfo(float).eps
+    feat[feat==0] =torch.finfo(signal.dtype).eps
 
     return feat,energy
 
