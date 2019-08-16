@@ -3,7 +3,7 @@
 from __future__ import division
 import numpy
 import torch
-import sigproc
+from . import sigproc
 #from scipy.fftpack import dct
 def dct(x, norm=None):
     """

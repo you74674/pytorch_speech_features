@@ -3,16 +3,14 @@ try:
 except ImportError:
     from distutils.core import setup
 
-setup(name='python_speech_features',
+setup(name='pytorch_speech_features',
       version='0.6',
-      description='Python Speech Feature extraction',
-      author='James Lyons',
-      author_email='james.lyons0@gmail.com',
+      description='Pytorch Speech Feature extraction',
       license='MIT',
-      url='https://github.com/jameslyons/python_speech_features',
-      packages=['python_speech_features'],
+      url='https://github.com/you74674/pytorch_speech_features',
+      packages=['pytorch_speech_features'],
       install_requires=[
         'numpy',
-        'scipy',
+        'torch'
       ]
     )
