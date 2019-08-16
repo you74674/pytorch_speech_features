@@ -2,8 +2,39 @@
 # Author: James Lyons 2012
 from __future__ import division
 import numpy
-from python_speech_features import sigproc
-from scipy.fftpack import dct
+import torch
+import sigproc
+#from scipy.fftpack import dct
+def dct(x, norm=None):
+    """
+    Discrete Cosine Transform, Type II (a.k.a. the DCT)
+    For the meaning of the parameter `norm`, see:
+    https://docs.scipy.org/doc/scipy-0.14.0/reference/generated/scipy.fftpack.dct.html
+    :param x: the input signal
+    :param norm: the normalization, None or 'ortho'
+    :return: the DCT-II of the signal over the last dimension
+    """
+    x_shape = x.shape
+    N = x_shape[-1]
+    x = x.contiguous().view(-1, N)
+
+    v = torch.cat([x[:, ::2], x[:, 1::2].flip([1])], dim=1)
+
+    Vc = torch.rfft(v, 1, onesided=False)
+
+    k = - torch.arange(N, dtype=x.dtype, device=x.device)[None, :] * numpy.pi / (2 * N)
+    W_r = torch.cos(k)
+    W_i = torch.sin(k)
+
+    V = Vc[:, :, 0] * W_r - Vc[:, :, 1] * W_i
+
+    if norm == 'ortho':
+        V[:, 0] /= numpy.sqrt(N) * 2
+        V[:, 1:] /= numpy.sqrt(N / 2) * 2
+
+    V = 2 * V.view(*x_shape)
+
+    return V
 
 def calculate_nfft(samplerate, winlen):
     """Calculates the FFT size as a power of two greater than or equal to
@@ -24,7 +55,7 @@ def calculate_nfft(samplerate, winlen):
 
 def mfcc(signal,samplerate=16000,winlen=0.025,winstep=0.01,numcep=13,
          nfilt=26,nfft=None,lowfreq=0,highfreq=None,preemph=0.97,ceplifter=22,appendEnergy=True,
-         winfunc=lambda x:numpy.ones((x,))):
+         winfunc=lambda x:torch.ones((x,))):
     """Compute MFCC features from an audio signal.
 
     :param signal: the audio signal from which to compute features. Should be an N*1 array
@@ -44,10 +75,13 @@ def mfcc(signal,samplerate=16000,winlen=0.025,winstep=0.01,numcep=13,
     """
     nfft = nfft or calculate_nfft(samplerate, winlen)
     feat,energy = fbank(signal,samplerate,winlen,winstep,nfilt,nfft,lowfreq,highfreq,preemph,winfunc)
-    feat = numpy.log(feat)
-    feat = dct(feat, type=2, axis=1, norm='ortho')[:,:numcep]
+    #feat = numpy.log(feat)
+    feat = feat.log()
+    #feat = dct(feat, type=2, axis=1, norm='ortho')[:,:numcep]
+    feat = dct(feat, norm='ortho')[..., :numcep]
     feat = lifter(feat,ceplifter)
-    if appendEnergy: feat[:,0] = numpy.log(energy) # replace first cepstral coefficient with log of frame energy
+    #if appendEnergy: feat[:,0] = numpy.log(energy) # replace first cepstral coefficient with log of frame energy
+    if appendEnergy: feat[...,0] = torch.log(energy)
     return feat
 
 def fbank(signal,samplerate=16000,winlen=0.025,winstep=0.01,
@@ -72,12 +106,17 @@ def fbank(signal,samplerate=16000,winlen=0.025,winstep=0.01,
     signal = sigproc.preemphasis(signal,preemph)
     frames = sigproc.framesig(signal, winlen*samplerate, winstep*samplerate, winfunc)
     pspec = sigproc.powspec(frames,nfft)
-    energy = numpy.sum(pspec,1) # this stores the total energy in each frame
-    energy = numpy.where(energy == 0,numpy.finfo(float).eps,energy) # if energy is zero, we get problems with log
+    #energy = numpy.sum(pspec,1) # this stores the total energy in each frame
+    energy = pspec.sum(dim=-1)
+    #energy = numpy.where(energy == 0,numpy.finfo(float).eps,energy) # if energy is zero, we get problems with log
+    energy[energy==0] = torch.finfo(float).eps
 
     fb = get_filterbanks(nfilt,nfft,samplerate,lowfreq,highfreq)
-    feat = numpy.dot(pspec,fb.T) # compute the filterbank energies
-    feat = numpy.where(feat == 0,numpy.finfo(float).eps,feat) # if feat is zero, we get problems with log
+    fb = torch.Tensor(fb).type_as(signal)
+    #feat = numpy.dot(pspec,fb.T) # compute the filterbank energies
+    feat = pspec @ fb.T
+    #feat = numpy.where(feat == 0,numpy.finfo(float).eps,feat) # if feat is zero, we get problems with log
+    feat[feat==0] =torch.finfo(float).eps
 
     return feat,energy
 
@@ -184,9 +223,12 @@ def lifter(cepstra, L=22):
     :param L: the liftering coefficient to use. Default is 22. L <= 0 disables lifter.
     """
     if L > 0:
-        nframes,ncoeff = numpy.shape(cepstra)
-        n = numpy.arange(ncoeff)
-        lift = 1 + (L/2.)*numpy.sin(numpy.pi*n/L)
+        #nframes,ncoeff = numpy.shape(cepstra)
+        nframes, ncoeff = cepstra.shape[-2:]
+        #n = numpy.arange(ncoeff)
+        n = torch.arange(ncoeff, dtype=cepstra.dtype)
+        #lift = 1 + (L/2.)*numpy.sin(numpy.pi*n/L)
+        lift = 1 + (L/2.)*torch.sin(numpy.pi*n/L)
         return lift*cepstra
     else:
         # values of L <= 0, do nothing

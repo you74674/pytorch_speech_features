@@ -5,20 +5,18 @@ import decimal
 import numpy
 import math
 import logging
-
+import torch
 
 def round_half_up(number):
     return int(decimal.Decimal(number).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP))
 
-
 def rolling_window(a, window, step=1):
     # http://ellisvalentiner.com/post/2017-03-21-np-strides-trick
     shape = a.shape[:-1] + (a.shape[-1] - window + 1, window)
-    strides = a.strides + (a.strides[-1],)
-    return numpy.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)[::step]
+    strides = a.stride() + (a.stride()[-1],)
+    return a.as_strided(shape, strides)[..., slice(None, None, step), :]
 
-
-def framesig(sig, frame_len, frame_step, winfunc=lambda x: numpy.ones((x,)), stride_trick=True):
+def framesig(sig, frame_len, frame_step, winfunc=lambda x: torch.ones((x,)), stride_trick=True):
     """Frame a signal into overlapping frames.
 
     :param sig: the audio signal to frame.
@@ -28,7 +26,8 @@ def framesig(sig, frame_len, frame_step, winfunc=lambda x: numpy.ones((x,)), str
     :param stride_trick: use stride trick to compute the rolling window and window multiplication faster
     :returns: an array of frames. Size is NUMFRAMES by frame_len.
     """
-    slen = len(sig)
+    #slen = len(sig)
+    slen = sig.shape[-1]
     frame_len = int(round_half_up(frame_len))
     frame_step = int(round_half_up(frame_step))
     if slen <= frame_len:
@@ -38,8 +37,9 @@ def framesig(sig, frame_len, frame_step, winfunc=lambda x: numpy.ones((x,)), str
 
     padlen = int((numframes - 1) * frame_step + frame_len)
 
-    zeros = numpy.zeros((padlen - slen,))
-    padsignal = numpy.concatenate((sig, zeros))
+    #zeros = numpy.zeros((padlen - slen,))
+    #padsignal = numpy.concatenate((sig, zeros))
+    padsignal = torch.nn.functional.pad(sig, (0, padlen - slen))
     if stride_trick:
         win = winfunc(frame_len)
         frames = rolling_window(padsignal, window=frame_len, step=frame_step)
@@ -50,7 +50,7 @@ def framesig(sig, frame_len, frame_step, winfunc=lambda x: numpy.ones((x,)), str
         frames = padsignal[indices]
         win = numpy.tile(winfunc(frame_len), (numframes, 1))
 
-    return frames * win
+    return frames * win.type_as(frames)
 
 
 def deframesig(frames, siglen, frame_len, frame_step, winfunc=lambda x: numpy.ones((x,))):
@@ -95,12 +95,14 @@ def magspec(frames, NFFT):
     :param NFFT: the FFT length to use. If NFFT > frame_len, the frames are zero-padded.
     :returns: If frames is an NxD matrix, output will be Nx(NFFT/2+1). Each row will be the magnitude spectrum of the corresponding frame.
     """
-    if numpy.shape(frames)[1] > NFFT:
+    if frames.shape[-1] > NFFT:
         logging.warn(
             'frame length (%d) is greater than FFT size (%d), frame will be truncated. Increase NFFT to avoid.',
-            numpy.shape(frames)[1], NFFT)
-    complex_spec = numpy.fft.rfft(frames, NFFT)
-    return numpy.absolute(complex_spec)
+            frames.shape[-1], NFFT)
+    frames = torch.nn.functional.pad(frames, (0, NFFT-frames.shape[-1]))
+    #complex_spec = numpy.fft.rfft(frames, NFFT)
+    complex_spec = torch.rfft(frames, 1)
+    return complex_spec.norm(dim=-1)
 
 
 def powspec(frames, NFFT):
@@ -110,7 +112,7 @@ def powspec(frames, NFFT):
     :param NFFT: the FFT length to use. If NFFT > frame_len, the frames are zero-padded.
     :returns: If frames is an NxD matrix, output will be Nx(NFFT/2+1). Each row will be the power spectrum of the corresponding frame.
     """
-    return 1.0 / NFFT * numpy.square(magspec(frames, NFFT))
+    return 1.0 / NFFT * (magspec(frames, NFFT)**2)
 
 
 def logpowspec(frames, NFFT, norm=1):
@@ -137,4 +139,6 @@ def preemphasis(signal, coeff=0.95):
     :param coeff: The preemphasis coefficient. 0 is no filter, default is 0.95.
     :returns: the filtered signal.
     """
-    return numpy.append(signal[0], signal[1:] - coeff * signal[:-1])
+    ret = signal.clone()
+    ret[..., 1:] -= coeff * ret[..., :-1]
+    return ret
